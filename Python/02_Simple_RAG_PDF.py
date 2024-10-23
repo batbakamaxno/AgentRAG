@@ -52,8 +52,8 @@ def get_index_db():
         ## PyPDFLoader: https://python.langchain.com/docs/modules/data_connection/document_loaders/pdf
         from langchain_community.document_loaders import PyPDFLoader
 
-        logger.debug(f'Document loaders. dir={dir}')
         dir = 'pdf'
+        logger.debug(f'Document loaders. dir={dir}')
         documents = []
         # Чтение всех PDF-файлов в указанной директории
         for root, dirs, files in os.walk(dir):
