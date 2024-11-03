@@ -43,7 +43,7 @@ https://ollama.com/download/windows
 
 ## 3. Проверяем доступность локальной модели из кода
 
-Запускать модуль `01_Simple_Request_Local_Model.py`
+Запускать модуль `Simple_Request_Local_Model.py`
 
 Ключевые моменты:
 - Модуль использует `loguru` для управления логированием, включая сохранение логов в файлы с ротацией и сжатием 
@@ -59,7 +59,7 @@ https://ollama.com/download/windows
 ## 4. Простой RAG для pdf файлов
 Поместить в папку Python\pdf один или несколько pdf фалов с текстовым слоем.
 
-Запускать модуль `02_Simple_RAG_PDF.py`
+Запускать модуль `Simple_RAG_PDF.py`
 
 Этот код импортирует необходимые модули, конфигурирует логирование, и инициализирует процесс обработки знаний 
 через векторные поиски и языковую модель. 
@@ -76,7 +76,7 @@ https://ollama.com/download/windows
 ## 5. Локальный RAG с агентами на LLaMA3
 ![](Local_RAG_Agent.png)
 
-Запускать модуль `03_Local_RAG_Agent.py`
+Запускать модуль `Local_RAG_Agent.py`
 
 Этот код содержит многие элементы связанные с обработкой естественного языка, 
 от извлечения и обработки документов до оценки релевантности и генерирования ответов. 
@@ -92,6 +92,21 @@ https://ollama.com/download/windows
 * **Самокоррекция**: Самокоррекция: Самокоррекция RAG. Исправление ответов, содержащих галлюцинации или не отвечающих на вопрос
 
 ![](graph_image.png)
+
+
+## 6. Как создать Базу Знаний без GPU
+Используем GPU в colab-e, см. нотебук `db_tool_01.ipynb`: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/kvoloshenko/Local_RAG_Agent_01/blob/main/Colab/db_tool_01.ipynb)
+
+## 7. Пользовательский интерфейс на streamlit
+Этот пример для варианта `Simple_RAG_PDF.py`, см. модуль `st.py`
+
+Запускать:
+1. Активировать venv, выполнить: `activate` 
+2. Перейти в каталог Python: `cd ../../Python`
+3. Выполнить: `streamlit run st.py`
+4. Приложение открыть в Браузере: http://localhost:8501/
+
+![](st.png)
 
 ---
 Видео см. здесь: https://youtu.be/ui_NvvMTKAc?si=T7XdoHrSKWcMsQwx

@@ -26,7 +26,7 @@ TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
 
 # Настройка логирования с использованием loguru
-logger.add("log/03_Local_RAG_Agent.log", format="{time} {level} {message}", level="DEBUG", rotation="100 KB", compression="zip")
+logger.add("log/Local_RAG_Agent.log", format="{time} {level} {message}", level="DEBUG", rotation="100 KB", compression="zip")
 
 # Инструкции для маршрутизации запросов
 # TODO здесь нужно настроить тему, для примера сказано про математику: 'related to mathematics'

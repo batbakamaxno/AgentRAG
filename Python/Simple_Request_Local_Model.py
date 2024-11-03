@@ -11,7 +11,7 @@
 from loguru import logger
 
 # Настройка логирования с использованием loguru
-logger.add("log/01_Simple_Request_Local_Model.log", format="{time} {level} {message}", level="DEBUG", rotation="100 KB", compression="zip")
+logger.add("log/Simple_Request_Local_Model.log", format="{time} {level} {message}", level="DEBUG", rotation="100 KB", compression="zip")
 
 def get_model_response(topic):
     """

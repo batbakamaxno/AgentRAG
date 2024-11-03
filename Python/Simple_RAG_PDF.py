@@ -84,7 +84,7 @@ def get_index_db():
 
     return db
 
-def get_message_content(topic, index_db, NUMBER_RELEVANT_CHUNKS):
+def get_message_content(topic, db, NUMBER_RELEVANT_CHUNKS):
     """
         Функция для извлечения релевантных кусочков текста из Базы-Знаний.
         Выполняется поиск по схожести, извлекаются top-N релевантных частей.
