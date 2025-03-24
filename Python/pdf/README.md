@@ -1,1 +1,0 @@
-# Catalog for PDF files
