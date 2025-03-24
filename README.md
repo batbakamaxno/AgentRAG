@@ -67,7 +67,7 @@ https://ollama.com/download/windows
 ---
 
 ## 5. Как создать Базу Знаний без GPU
-Используем GPU в colab-e, см. нотебук `db_tool_01.ipynb`: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/kvoloshenko/Local_RAG_Agent_01/blob/main/Colab/db_tool_01.ipynb)
+Используем GPU в colab-e
 
 ---
 
