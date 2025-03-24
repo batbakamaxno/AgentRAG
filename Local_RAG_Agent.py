@@ -28,7 +28,7 @@ logging.basicConfig(level=logging.DEBUG)
 # Проверка и установка API ключа Tavily
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 if not TAVILY_API_KEY:
-    TAVILY_API_KEY = ""  # Используем тестовый ключ
+    TAVILY_API_KEY = "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"  # Используем тестовый ключ
 os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
 
 # Инициализация необходимых компонентов
@@ -107,6 +107,81 @@ public class RegistrationTest {
 doc_grader_prompt = """Here is the retrieved document: \n\n {document} \n\n Here is the user question: \n\n {question}. 
     This carefully and objectively assess whether the document contains at least some information that is relevant to the question.
     Return JSON with single key, binary_score, that is 'yes' or 'no' score to indicate whether the document contains at least some information that is relevant to the question."""
+
+# Промпт для проверки фактической точности
+fact_checking_prompt = """Ты - эксперт по проверке фактической точности. Проанализируй сгенерированный ответ и исходные документы.
+
+Исходные документы:
+{context}
+
+Сгенерированный ответ:
+{generated_response}
+
+Оцени:
+1. Соответствие фактов в ответе исходным документам
+2. Наличие утверждений, которых нет в исходных документах
+3. Точность технических деталей
+
+Верни JSON в формате:
+{
+    "factual_accuracy": float, // от 0 до 1
+    "hallucinations": [string], // список найденных галлюцинаций
+    "missing_facts": [string], // важные факты из документов, пропущенные в ответе
+    "technical_accuracy": float // от 0 до 1
+}"""
+
+# Промпт для сравнения ответа с документами
+response_comparison_prompt = """Проанализируй соответствие сгенерированного ответа исходным документам.
+
+Исходные документы:
+{context}
+
+Сгенерированный ответ:
+{generated_response}
+
+Вопрос пользователя:
+{question}
+
+Оцени:
+1. Полноту ответа на вопрос
+2. Использование информации из документов
+3. Логическую связность
+
+Верни JSON в формате:
+{
+    "completeness": float, // от 0 до 1
+    "source_usage": float, // от 0 до 1
+    "coherence": float, // от 0 до 1
+    "needs_improvement": boolean,
+    "improvement_areas": [string]
+}"""
+
+# Промпт для определения галлюцинаций
+hallucination_check_prompt = """Проверь сгенерированный ответ на наличие галлюцинаций и необоснованных утверждений.
+
+Исходные документы:
+{context}
+
+Сгенерированный ответ:
+{generated_response}
+
+Проверь:
+1. Каждое фактическое утверждение
+2. Каждую техническую деталь
+3. Каждую ссылку на источники
+
+Верни JSON в формате:
+{
+    "has_hallucinations": boolean,
+    "hallucination_details": [
+        {
+            "statement": string,
+            "type": "fact|technical|reference",
+            "confidence": float
+        }
+    ],
+    "safe_to_use": boolean
+}"""
 
 doc_grader_instructions = """You are a grader assessing relevance of a retrieved document to a user question.
     If the document contains keyword(s) or semantic meaning related to the question, grade it as relevant."""
@@ -260,6 +335,36 @@ def decide_to_generate(state):
 
 def grade_generation(state):
     logger.debug("---GRADE GENERATION---")
+    
+    question = state["question"]
+    generation = state.get("generation", "")
+    documents = state.get("documents", [])
+    
+    # Подготовка контекста из документов
+    context = "\n".join([doc.page_content if hasattr(doc, 'page_content') else str(doc) for doc in documents])
+    
+    # Проверка качества ответа
+    is_valid, validation_results = validate_response(context, generation, question)
+    
+    if not is_valid:
+        logger.warning("Ответ не прошел валидацию")
+        
+        # Проверяем количество попыток
+        if state.get("loop_step", 0) >= state.get("max_retries", 3):
+            logger.warning("Достигнуто максимальное количество попыток")
+            return "max retries"
+            
+        # Если есть галлюцинации или низкое качество - пробуем веб-поиск
+        if validation_results["hallucination_check"].get("has_hallucinations", True):
+            logger.info("Обнаружены галлюцинации, переключаемся на веб-поиск")
+            return "not useful"
+            
+        # Если ответ неполный или требует улучшения
+        if validation_results["source_comparison"].get("needs_improvement", True):
+            logger.info("Ответ требует улучшения, пробуем еще раз")
+            return "not useful"
+    
+    logger.info("Ответ прошел валидацию")
     return "useful"
 
 # Создание и настройка графа
@@ -464,6 +569,152 @@ def save_response(question, response, response_type="general"):
                 logger.info(f'Java-код сохранен в файл: {java_filename}')
     except Exception as e:
         logger.error(f'Ошибка при сохранении ответа: {e}')
+
+# Функции для проверки качества ответов
+def check_factual_accuracy(context, generated_response):
+    """
+    Проверяет фактическую точность сгенерированного ответа.
+    
+    Args:
+        context (str): Исходные документы
+        generated_response (str): Сгенерированный ответ
+    
+    Returns:
+        dict: Результаты проверки фактической точности
+    """
+    try:
+        prompt = fact_checking_prompt.format(
+            context=context,
+            generated_response=generated_response
+        )
+        
+        result = llm_json_mode.invoke([HumanMessage(content=prompt)])
+        
+        if isinstance(result, str):
+            result = json.loads(result)
+            
+        logger.info(f"Результаты проверки фактической точности: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"Ошибка при проверке фактической точности: {e}")
+        return {
+            "factual_accuracy": 0.0,
+            "hallucinations": ["Ошибка при проверке"],
+            "missing_facts": [],
+            "technical_accuracy": 0.0
+        }
+
+def compare_with_sources(context, generated_response, question):
+    """
+    Сравнивает сгенерированный ответ с исходными документами.
+    
+    Args:
+        context (str): Исходные документы
+        generated_response (str): Сгенерированный ответ
+        question (str): Вопрос пользователя
+    
+    Returns:
+        dict: Результаты сравнения
+    """
+    try:
+        prompt = response_comparison_prompt.format(
+            context=context,
+            generated_response=generated_response,
+            question=question
+        )
+        
+        result = llm_json_mode.invoke([HumanMessage(content=prompt)])
+        
+        if isinstance(result, str):
+            result = json.loads(result)
+            
+        logger.info(f"Результаты сравнения с источниками: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"Ошибка при сравнении с источниками: {e}")
+        return {
+            "completeness": 0.0,
+            "source_usage": 0.0,
+            "coherence": 0.0,
+            "needs_improvement": True,
+            "improvement_areas": ["Ошибка при сравнении"]
+        }
+
+def check_for_hallucinations(context, generated_response):
+    """
+    Проверяет ответ на наличие галлюцинаций.
+    
+    Args:
+        context (str): Исходные документы
+        generated_response (str): Сгенерированный ответ
+    
+    Returns:
+        dict: Результаты проверки на галлюцинации
+    """
+    try:
+        prompt = hallucination_check_prompt.format(
+            context=context,
+            generated_response=generated_response
+        )
+        
+        result = llm_json_mode.invoke([HumanMessage(content=prompt)])
+        
+        if isinstance(result, str):
+            result = json.loads(result)
+            
+        logger.info(f"Результаты проверки на галлюцинации: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"Ошибка при проверке на галлюцинации: {e}")
+        return {
+            "has_hallucinations": True,
+            "hallucination_details": [{"statement": "Ошибка при проверке", "type": "error", "confidence": 0.0}],
+            "safe_to_use": False
+        }
+
+def validate_response(context, generated_response, question):
+    """
+    Комплексная проверка качества сгенерированного ответа.
+    
+    Args:
+        context (str): Исходные документы
+        generated_response (str): Сгенерированный ответ
+        question (str): Вопрос пользователя
+    
+    Returns:
+        tuple: (bool, dict) - флаг валидности и детальные результаты проверки
+    """
+    # Проверка фактической точности
+    fact_check = check_factual_accuracy(context, generated_response)
+    
+    # Сравнение с источниками
+    source_comparison = compare_with_sources(context, generated_response, question)
+    
+    # Проверка на галлюцинации
+    hallucination_check = check_for_hallucinations(context, generated_response)
+    
+    # Агрегация результатов
+    validation_results = {
+        "factual_check": fact_check,
+        "source_comparison": source_comparison,
+        "hallucination_check": hallucination_check,
+        "overall_quality": (
+            fact_check.get("factual_accuracy", 0) * 0.4 +
+            source_comparison.get("completeness", 0) * 0.3 +
+            source_comparison.get("coherence", 0) * 0.3
+        )
+    }
+    
+    # Определение валидности ответа
+    is_valid = (
+        validation_results["overall_quality"] >= 0.7 and
+        not hallucination_check.get("has_hallucinations", True) and
+        not source_comparison.get("needs_improvement", True)
+    )
+    
+    logger.info(f"Результаты валидации ответа: valid={is_valid}, quality={validation_results['overall_quality']}")
+    
+    return is_valid, validation_results
 
 if __name__ == "__main__":
     # Пример использования системы для создания автотеста из ручного тест-кейса
