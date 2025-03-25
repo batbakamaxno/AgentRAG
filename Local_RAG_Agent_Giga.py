@@ -1,7 +1,7 @@
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 import logging
-from langchain.document_loaders import TextLoader, PyPDFLoader
+from langchain_community.document_loaders import TextLoader, PyPDFLoader
 from langchain_community.vectorstores import FAISS
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, END
@@ -10,20 +10,34 @@ from typing import List, Annotated
 import operator
 import json
 from langchain_community.tools.tavily_search import TavilySearchResults
-from langchain_ollama import ChatOllama
+from gigachat import GigaChat
 import os
 from dotenv import load_dotenv
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 import sys
 import re
 from datetime import datetime
 
-# Загрузка переменных окружения
-load_dotenv()
-
 # Настройка логирования
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
+
+# Загрузка переменных окружения
+env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+if os.path.exists(env_path):
+    load_dotenv(env_path)
+    logger.info("Файл .env успешно загружен")
+else:
+    logger.warning(f"Файл .env не найден по пути: {env_path}")
+
+# Проверка и установка API ключа GigaChat
+GIGACHAT_CREDENTIALS = os.getenv("GIGACHAT_CREDENTIALS")
+if not GIGACHAT_CREDENTIALS:
+    GIGACHAT_CREDENTIALS = "" # Используем тестовый ключ
+    logger.warning("GIGACHAT_CREDENTIALS не установлен. Используется значение по умолчанию.")
+else:
+    logger.info("GIGACHAT_CREDENTIALS успешно загружен из .env")
+os.environ["GIGACHAT_CREDENTIALS"] = GIGACHAT_CREDENTIALS
 
 # Проверка и установка API ключа Tavily
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
@@ -199,26 +213,16 @@ class GraphState(TypedDict):
     loop_step: Annotated[int, operator.add]
     documents: List[str]
 
-# Настройка LLM
+# Настройка GigaChat
 try:
-    local_llm = "llama2:7b"  # Используем установленную модель
-    llm = ChatOllama(
-        model=local_llm,
-        temperature=0,
-        verbose=True
+    gigachat = GigaChat(
+        credentials=os.getenv("GIGACHAT_CREDENTIALS"),
+        verify_ssl_certs=False
     )
-    # Проверка доступности модели
-    llm.invoke([HumanMessage(content="test")])
-    logger.info(f"Модель {local_llm} успешно инициализирована")
+    logger.info("GigaChat успешно инициализирован")
 except Exception as e:
-    logger.error(f"Ошибка при инициализации модели {local_llm}: {e}")
-    raise Exception("Не удалось инициализировать модель LLM")
-
-llm_json_mode = ChatOllama(
-    model=local_llm,
-    temperature=0,
-    format="json"
-)
+    logger.error(f"Ошибка при инициализации GigaChat: {e}")
+    raise Exception("Не удалось инициализировать GigaChat")
 
 # Функции для узлов графа
 def retrieve(state):
@@ -258,14 +262,54 @@ def generate(state):
     
     ### Вопрос пользователя:
     {question}
+    
+    ### Важные требования:
+    1. Ответ должен содержать полный Java-код теста
+    2. Код должен быть оформлен в блоке ```java
+    3. Должны быть включены все необходимые импорты
+    4. Тест должен соответствовать описанию из тест-кейса
+    5. Должны быть реализованы все шаги теста
     """
     
-    generation = llm.invoke([
-        SystemMessage(content="Ты - эксперт по автоматизации тестирования. Используй контекст для создания автотестов."),
-        HumanMessage(content=full_prompt)
-    ])
-    
-    return {"generation": generation, "loop_step": loop_step + 1}
+    try:
+        logger.info("Отправка запроса к GigaChat")
+        messages = [
+            {"role": "system", "content": "Ты - эксперт по автоматизации тестирования. Твоя задача - создать рабочий Java-тест на основе тест-кейса. Используй Rest Assured для API тестирования."},
+            {"role": "user", "content": full_prompt}
+        ]
+        
+        generation = gigachat.chat(messages)
+        
+        response = generation.content
+        logger.info(f"Получен ответ от GigaChat длиной {len(response)} символов")
+        
+        # Проверяем наличие Java-кода в ответе
+        if '```java' not in response:
+            logger.warning("В ответе отсутствует блок с Java-кодом")
+            return {"generation": "", "loop_step": loop_step + 1}
+            
+        # Проверяем наличие основных компонентов теста
+        required_elements = [
+            "import org.junit.jupiter.api",
+            "public class",
+            "@Test",
+            "given()",
+            "when()",
+            "then()"
+        ]
+        
+        missing_elements = [elem for elem in required_elements if elem not in response]
+        if missing_elements:
+            logger.warning(f"В ответе отсутствуют важные элементы: {missing_elements}")
+            return {"generation": "", "loop_step": loop_step + 1}
+            
+        logger.info("Ответ успешно сгенерирован и прошел базовую валидацию")
+        return {"generation": response, "loop_step": loop_step + 1}
+        
+    except Exception as e:
+        logger.error(f"Ошибка при генерации ответа: {e}")
+        logger.exception("Подробности ошибки:")
+        return {"generation": "", "loop_step": loop_step + 1}
 
 def grade_documents(state):
     logger.debug("---GRADE DOCUMENTS---")
@@ -292,8 +336,8 @@ def grade_documents(state):
         """
         
         try:
-            result = llm_json_mode.invoke([HumanMessage(content=grading_prompt)])
-            if isinstance(result, str) and 'yes' in result.lower():
+            result = gigachat.chat([HumanMessage(content=grading_prompt)])
+            if isinstance(result.content, str) and 'yes' in result.content.lower():
                 relevant_docs.append(doc)
         except Exception as e:
             logger.error(f"Ошибка при оценке документа: {e}")
@@ -343,6 +387,10 @@ def grade_generation(state):
     generation = state.get("generation", "")
     documents = state.get("documents", [])
     
+    if not generation:
+        logger.warning("Получен пустой ответ")
+        return "not useful"
+    
     # Подготовка контекста из документов
     context = "\n".join([doc.page_content if hasattr(doc, 'page_content') else str(doc) for doc in documents])
     
@@ -355,6 +403,10 @@ def grade_generation(state):
         # Проверяем количество попыток
         if state.get("loop_step", 0) >= state.get("max_retries", 3):
             logger.warning("Достигнуто максимальное количество попыток")
+            # Если есть хоть какой-то код, считаем его полезным
+            if '```java' in generation:
+                logger.info("Найден Java-код, считаем ответ полезным")
+                return "useful"
             return "max retries"
             
         # Если есть галлюцинации или низкое качество - пробуем веб-поиск
@@ -433,11 +485,8 @@ def get_vector_store():
     logger.debug('Инициализация векторного хранилища')
     
     # Создание векторных представлений (Embeddings)
-    model_id = 'intfloat/multilingual-e5-large'
-    model_kwargs = {'device': 'cpu'}
     embeddings = HuggingFaceEmbeddings(
-        model_name=model_id,
-        model_kwargs=model_kwargs
+        model_name="bert-base-uncased"
     )
 
     db_file_name = 'db/db_01'
@@ -515,18 +564,22 @@ def save_response(question, response, response_type="general"):
         response (str): Ответ системы
         response_type (str): Тип ответа (например, 'general', 'test_case', etc.)
     """
-    # Создаем директории если их нет
-    responses_dir = 'responses'
-    java_dir = os.path.join(responses_dir, 'java')
-    for dir_path in [responses_dir, java_dir]:
-        if not os.path.exists(dir_path):
-            os.makedirs(dir_path)
-            logger.info(f'Создана директория {dir_path}/')
-    
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Форматируем ответ в структурированном виде
-    formatted_response = f"""
+    try:
+        # Создаем директории если их нет
+        responses_dir = os.path.abspath('responses')
+        java_dir = os.path.join(responses_dir, 'java')
+        
+        logger.info(f"Создание директорий: {responses_dir}, {java_dir}")
+        for dir_path in [responses_dir, java_dir]:
+            if not os.path.exists(dir_path):
+                os.makedirs(dir_path)
+                logger.info(f'Создана директория {dir_path}/')
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        logger.info(f"Создание файлов с временной меткой: {timestamp}")
+        
+        # Форматируем ответ в структурированном виде
+        formatted_response = f"""
 # Результат генерации автотеста
 ## Исходный запрос
 {question}
@@ -551,12 +604,13 @@ def save_response(question, response, response_type="general"):
 - Тип ответа: {response_type}
 """
 
-    # Сохраняем форматированный ответ
-    txt_filename = f"{responses_dir}/response_{response_type}_{timestamp}.md"
-    try:
+        # Сохраняем форматированный ответ
+        txt_filename = os.path.join(responses_dir, f"response_{response_type}_{timestamp}.md")
+        logger.info(f"Сохранение ответа в файл: {txt_filename}")
+        
         with open(txt_filename, 'w', encoding='utf-8') as f:
             f.write(formatted_response)
-        logger.info(f'Ответ сохранен в файл: {txt_filename}')
+        logger.info(f'Ответ успешно сохранен в файл: {txt_filename}')
         
         # Если есть Java-код, сохраняем его отдельно
         if '```java' in response:
@@ -566,12 +620,18 @@ def save_response(question, response, response_type="general"):
                 class_name_match = re.search(r'public class (\w+)', java_code)
                 class_name = class_name_match.group(1) if class_name_match else "Test"
                 
-                java_filename = f"{java_dir}/{class_name}_{timestamp}.java"
+                java_filename = os.path.join(java_dir, f"{class_name}_{timestamp}.java")
+                logger.info(f"Сохранение Java-кода в файл: {java_filename}")
+                
                 with open(java_filename, 'w', encoding='utf-8') as f:
                     f.write(java_code)
-                logger.info(f'Java-код сохранен в файл: {java_filename}')
+                logger.info(f'Java-код успешно сохранен в файл: {java_filename}')
+            else:
+                logger.warning("Не удалось извлечь Java-код из ответа")
     except Exception as e:
-        logger.error(f'Ошибка при сохранении ответа: {e}')
+        logger.error(f'Ошибка при сохранении ответа: {str(e)}')
+        logger.exception("Подробности ошибки:")
+        raise
 
 # Функции для проверки качества ответов
 def check_factual_accuracy(context, generated_response):
@@ -591,10 +651,10 @@ def check_factual_accuracy(context, generated_response):
             generated_response=generated_response
         )
         
-        result = llm_json_mode.invoke([HumanMessage(content=prompt)])
+        result = gigachat.chat([HumanMessage(content=prompt)])
         
-        if isinstance(result, str):
-            result = json.loads(result)
+        if isinstance(result.content, str):
+            result = json.loads(result.content)
             
         logger.info(f"Результаты проверки фактической точности: {result}")
         return result
@@ -626,10 +686,10 @@ def compare_with_sources(context, generated_response, question):
             question=question
         )
         
-        result = llm_json_mode.invoke([HumanMessage(content=prompt)])
+        result = gigachat.chat([HumanMessage(content=prompt)])
         
-        if isinstance(result, str):
-            result = json.loads(result)
+        if isinstance(result.content, str):
+            result = json.loads(result.content)
             
         logger.info(f"Результаты сравнения с источниками: {result}")
         return result
@@ -660,10 +720,10 @@ def check_for_hallucinations(context, generated_response):
             generated_response=generated_response
         )
         
-        result = llm_json_mode.invoke([HumanMessage(content=prompt)])
+        result = gigachat.chat([HumanMessage(content=prompt)])
         
-        if isinstance(result, str):
-            result = json.loads(result)
+        if isinstance(result.content, str):
+            result = json.loads(result.content)
             
         logger.info(f"Результаты проверки на галлюцинации: {result}")
         return result
@@ -730,7 +790,7 @@ if __name__ == "__main__":
         if file_path.endswith('.pdf'):
             loader = PyPDFLoader(file_path)
         elif file_path.endswith('.txt'):
-            loader = TextLoader(file_path, encoding='utf-8')  # Добавляем явное указание кодировки
+            loader = TextLoader(file_path, encoding='utf-8')
         else:
             raise ValueError("Поддерживаются только PDF и TXT файлы")
         return loader.load()
@@ -766,22 +826,50 @@ if __name__ == "__main__":
                 inputs = {
                     "question": f"Создай автоматизированный тест на Java на основе ручного тест-кейса из файла {test_case_file}",
                     "max_retries": 3,
-                    "documents": test_case_documents
+                    "documents": test_case_documents,
+                    "loop_step": 0,  # Добавляем начальное значение для счетчика попыток
+                    "answers": 0  # Добавляем счетчик ответов
                 }
                 print("\nЗадаю вопрос для создания автотеста:", inputs["question"])
                 response = ""
-                for event in graph.stream(inputs, stream_mode="values"):
-                    logger.debug(event)
-                    if "generation" in event:
-                        response = event["generation"]
+                
+                try:
+                    for event in graph.stream(inputs, stream_mode="values"):
+                        logger.debug(event)
+                        if "generation" in event:
+                            response = event["generation"]
+                            # Если получили ответ с кодом, прерываем цикл
+                            if '```java' in response:
+                                logger.info("Получен ответ с Java-кодом, прерываем цикл")
+                                break
+                            
+                            # Проверяем количество попыток
+                            if event.get("loop_step", 0) >= inputs["max_retries"]:
+                                logger.warning("Достигнуто максимальное количество попыток")
+                                break
+                                
+                            # Проверяем количество ответов
+                            if event.get("answers", 0) >= 5:
+                                logger.warning("Достигнуто максимальное количество ответов")
+                                break
+                                
+                except Exception as e:
+                    logger.error(f"Ошибка при обработке графа: {e}")
+                    if response:  # Если успели получить ответ до ошибки
+                        save_response(inputs["question"], response, "test_case")
+                    continue
+                
                 # Сохраняем ответ
                 if response:
                     save_response(inputs["question"], response, "test_case")
+                else:
+                    logger.warning("Не удалось получить ответ с кодом")
+                    
             except Exception as e:
                 logger.error(f"Ошибка при создании автотеста: {e}")
                 logger.exception("Подробности ошибки:")
+                continue  # Продолжаем обработку следующего файла
 
     except Exception as e:
         logger.error(f"Ошибка при создании автотеста: {e}")
-        logger.exception("Подробности ошибки:")
-
+        logger.exception("Подробности ошибки:") 
