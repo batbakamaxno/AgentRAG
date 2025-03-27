@@ -205,8 +205,8 @@ def generate_test_case(test_case_content):
         # Отправляем запрос к GigaChat
         response = gigachat.chat(full_prompt)
         
-        if response and hasattr(response, 'content'):
-            response_text = response.content
+        if response and hasattr(response, 'choices') and response.choices:
+            response_text = response.choices[0].message.content
             logger.info(f"Получен ответ от GigaChat длиной {len(response_text)} символов")
             return response_text
         else:
