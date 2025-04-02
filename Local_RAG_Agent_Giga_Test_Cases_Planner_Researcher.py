@@ -3,7 +3,6 @@ import os
 from dotenv import load_dotenv
 import logging
 from datetime import datetime
-from langchain_community.document_loaders import TextLoader
 from PyPDF2 import PdfReader
 from typing import Dict, List, Optional
 
@@ -102,9 +101,8 @@ class TestCaseGenerator:
         file_extension = os.path.splitext(file_path)[1].lower()
         
         if file_extension == '.txt':
-            loader = TextLoader(file_path, encoding='utf-8')
-            documents = loader.load()
-            return "\n".join([doc.page_content for doc in documents])
+            with open(file_path, 'r', encoding='utf-8') as file:
+                return file.read()
         elif file_extension == '.pdf':
             reader = PdfReader(file_path)
             text = ""
