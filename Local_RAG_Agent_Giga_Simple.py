@@ -4,7 +4,6 @@ from dotenv import load_dotenv
 import logging
 import re
 from datetime import datetime
-from langchain_community.document_loaders import TextLoader
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
@@ -218,20 +217,33 @@ def generate_test_case(test_case_content):
         logger.exception("Подробности ошибки:")
         return ""
 
+def load_file(file_path):
+    """
+    Загружает текстовый файл и возвращает его содержимое.
+    
+    Args:
+        file_path (str): Путь к текстовому файлу
+        
+    Returns:
+        list: Список с содержимым файла
+    """
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Файл не найден: {file_path}")
+        
+    if file_path.endswith('.txt'):
+        try:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                content = file.read()
+            return [{"content": content, "metadata": {"source": file_path}}]
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке файла {file_path}: {e}")
+            raise
+    else:
+        raise ValueError("Поддерживаются только TXT файлы")
+
 if __name__ == "__main__":
     # Пример использования системы для создания автотеста из ручного тест-кейса
     
-    # Функция для загрузки файла
-    def load_file(file_path):
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"Файл не найден: {file_path}")
-            
-        if file_path.endswith('.txt'):
-            loader = TextLoader(file_path, encoding='utf-8')
-        else:
-            raise ValueError("Поддерживаются только TXT файлы")
-        return loader.load()
-
     # Пример использования для создания автотеста
     try:
         # Путь к директории с тест-кейсами
@@ -259,7 +271,7 @@ if __name__ == "__main__":
             
             try:
                 test_case_documents = load_file(full_path)
-                test_case_content = "\n".join([doc.page_content for doc in test_case_documents])
+                test_case_content = "\n".join([doc["content"] for doc in test_case_documents])
                 
                 question = f"Создай автоматизированный тест на Java на основе ручного тест-кейса из файла {test_case_file}"
                 print("\nЗадаю вопрос для создания автотеста:", question)
